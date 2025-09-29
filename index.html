@@ -687,14 +687,25 @@
           growthEl.textContent = growthRate.toFixed(2);
 
           const growthCard = growthEl.closest(".status-card");
-          if (Math.abs(growthRate) < 0.5) {
-            growthCard.style.background = "rgba(34,197,94,0.15)";
+
+          // Negative growth is good - memory being freed
+          if (growthRate < 0) {
+            growthCard.style.background = "rgba(34,197,94,0.15)"; // green
             growthCard.style.border = "1px solid rgba(34,197,94,0.4)";
-          } else if (Math.abs(growthRate) < 2) {
-            growthCard.style.background = "rgba(250,204,21,0.15)";
+          }
+          // Small positive growth < 0.5 MB/min is acceptable
+          else if (growthRate < 0.5) {
+            growthCard.style.background = "rgba(34,197,94,0.15)"; // green
+            growthCard.style.border = "1px solid rgba(34,197,94,0.4)";
+          }
+          // Moderate growth 0.5-2 MB/min needs attention
+          else if (growthRate < 2) {
+            growthCard.style.background = "rgba(250,204,21,0.15)"; // yellow
             growthCard.style.border = "1px solid rgba(250,204,21,0.4)";
-          } else {
-            growthCard.style.background = "rgba(248,113,113,0.15)";
+          }
+          // High growth > 2 MB/min is concerning
+          else {
+            growthCard.style.background = "rgba(248,113,113,0.15)"; // red
             growthCard.style.border = "1px solid rgba(248,113,113,0.4)";
           }
         }
