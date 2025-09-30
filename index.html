@@ -6,6 +6,7 @@
     <title>QA Performance Testing Dashboard</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <style>
       * {
         margin: 0;
@@ -283,6 +284,31 @@
         font-weight: 600;
         color: #fff;
       }
+      .export-button {
+        position: fixed;
+        bottom: 30px;
+        right: 30px;
+        padding: 15px 30px;
+        background: linear-gradient(135deg, #10b981, #059669);
+        color: white;
+        border: none;
+        border-radius: 50px;
+        font-size: 1em;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 5px 20px rgba(16, 185, 129, 0.4);
+        transition: all 0.3s ease;
+        z-index: 1000;
+      }
+      .export-button:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 25px rgba(16, 185, 129, 0.5);
+      }
+      .export-button:disabled {
+        background: #555;
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
     </style>
   </head>
   <body>
@@ -441,6 +467,10 @@
           <canvas id="comparisonChart"></canvas>
         </div>
       </div>
+
+      <button id="exportPdfBtn" class="export-button" disabled>
+        📄 Export to PDF
+      </button>
     </div>
 
     <script>
@@ -476,6 +506,7 @@
             }
 
             updateComparison();
+            enableExportButton();
             document.getElementById(
               "fileStatus"
             ).textContent = `✓ Loaded ${file.name}`;
@@ -970,6 +1001,138 @@
         const minTs = Math.min(...data.map((d) => d.timestamp));
         return data.map((d) => ({ ...d, timestamp: d.timestamp - minTs }));
       }
+
+      // Enable export button when data is loaded
+      function enableExportButton() {
+        const btn = document.getElementById("exportPdfBtn");
+        if (memoryData1 || memoryData2) {
+          btn.disabled = false;
+        }
+      }
+
+      // Call this function at the end of handleMemoryFile after updateComparison()
+      // Add this line: enableExportButton();
+
+      async function exportToPDF() {
+        const btn = document.getElementById("exportPdfBtn");
+        btn.disabled = true;
+        btn.textContent = "⏳ Generating PDF...";
+
+        try {
+          const { jsPDF } = window.jspdf;
+          const pdf = new jsPDF("p", "mm", "a4");
+          let yPos = 20;
+
+          // Title
+          pdf.setFontSize(20);
+          pdf.setTextColor(102, 126, 234);
+          pdf.text("QA Performance Testing Report", 105, yPos, {
+            align: "center",
+          });
+          yPos += 15;
+
+          // Add TSV1 data if available
+          if (memoryData1) {
+            await addDashboardToPDF(pdf, 1, yPos);
+            yPos += 100;
+          }
+
+          // Add TSV2 data if available (new page if both exist)
+          if (memoryData2) {
+            if (memoryData1) pdf.addPage();
+            await addDashboardToPDF(pdf, 2, memoryData1 ? 20 : yPos);
+          }
+
+          // Add comparison chart if both exist
+          if (memoryData1 && memoryData2) {
+            pdf.addPage();
+            pdf.setFontSize(16);
+            pdf.text("Memory Comparison", 105, 20, { align: "center" });
+            const compChart = document.getElementById("comparisonChart");
+            const compImg = compChart.toDataURL("image/png");
+            pdf.addImage(compImg, "PNG", 15, 30, 180, 100);
+          }
+
+          // Save PDF
+          const timestamp = new Date()
+            .toISOString()
+            .slice(0, 19)
+            .replace(/:/g, "-");
+          pdf.save(`QA-Performance-Report-${timestamp}.pdf`);
+
+          btn.textContent = "✓ PDF Exported!";
+          setTimeout(() => {
+            btn.textContent = "📄 Export to PDF";
+            btn.disabled = false;
+          }, 2000);
+        } catch (error) {
+          console.error("PDF generation error:", error);
+          btn.textContent = "❌ Export Failed";
+          setTimeout(() => {
+            btn.textContent = "📄 Export to PDF";
+            btn.disabled = false;
+          }, 2000);
+        }
+      }
+
+      async function addDashboardToPDF(pdf, idx, startY) {
+        const data = idx === 1 ? memoryData1 : memoryData2;
+
+        pdf.setFontSize(14);
+        pdf.setTextColor(0, 0, 0);
+        pdf.text(
+          `Dashboard ${idx}: ${data.fileName || "TSV" + idx}`,
+          15,
+          startY
+        );
+
+        // Add metrics
+        pdf.setFontSize(10);
+        let y = startY + 10;
+
+        const metrics = [
+          [
+            "System Health",
+            document.getElementById(`systemHealth${idx}`).textContent + "%",
+          ],
+          [
+            "App Health",
+            document.getElementById(`appHealth${idx}`).textContent + "%",
+          ],
+          [
+            "Peak Memory",
+            document.getElementById(`peakMemory${idx}`).textContent,
+          ],
+          [
+            "Average Memory",
+            document.getElementById(`averageMemory${idx}`).textContent,
+          ],
+          [
+            "Memory Growth",
+            document.getElementById(`memoryGrowth${idx}`).textContent +
+              " MB/min",
+          ],
+          [
+            "Leak Status",
+            document.getElementById(`leakStatus${idx}`).textContent,
+          ],
+        ];
+
+        metrics.forEach(([label, value]) => {
+          pdf.text(`${label}: ${value}`, 15, y);
+          y += 7;
+        });
+
+        // Add chart image
+        const chart = document.getElementById(`memoryLeakChart${idx}`);
+        const imgData = chart.toDataURL("image/png");
+        pdf.addImage(imgData, "PNG", 15, y + 5, 180, 100);
+      }
+
+      // Add event listener
+      document
+        .getElementById("exportPdfBtn")
+        .addEventListener("click", exportToPDF);
     </script>
   </body>
 </html>
