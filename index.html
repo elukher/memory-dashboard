@@ -563,7 +563,7 @@
         );
 
         const values = rssData.map((d) => d.value);
-        const peak = Math.max(...values);
+        const peak = values.reduce((max, v) => (v > max ? v : max), -Infinity);
         const avg = values.reduce((a, b) => a + b, 0) / values.length;
 
         // Extract MemTotal & MemAvailable from TSV metadata
@@ -686,8 +686,11 @@
           .slice()
           .sort((a, b) => a.timestamp - b.timestamp);
 
-        // Find peak value to use as reference
-        const peakValue = Math.max(...sortedData.map((d) => d.value));
+        // Instead of: const peakValue = Math.max(...sortedData.map((d) => d.value));
+        const peakValue = sortedData.reduce(
+          (max, d) => (d.value > max ? d.value : max),
+          -Infinity
+        );
 
         // Filter out values less than 40% of peak (this removes initial small values)
         const meaningfulData = sortedData.filter(
@@ -904,11 +907,14 @@
           return { status: "INSUFFICIENT", confidence: 0 };
 
         const sorted = rssData
-          .slice()
+          .slice()git 
           .sort((a, b) => a.timestamp - b.timestamp);
 
-        // Get the growth rate that was already calculated in createMemoryLeakChart
-        const peakValue = Math.max(...sorted.map((d) => d.value));
+        // Use reduce:
+        const peakValue = sorted.reduce(
+          (max, d) => (d.value > max ? d.value : max),
+          -Infinity
+        );
         const meaningfulData = sorted.filter((d) => d.value > peakValue * 0.4);
 
         if (meaningfulData.length < 2) {
