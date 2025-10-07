@@ -524,8 +524,9 @@
             timestamp: parseFloat(row["time_seconds"] || 0),
             value: parseFloat(row["memory_mb"] || 0),
             name: row["counter_name"] || "",
-            totalRam: parseFloat(row["total_ram_mb"] || 0),
-            availableRam: parseFloat(row["available_ram_mb"] || 0),
+            // 🧠 swapped
+            totalRam: parseFloat(row["available_ram_mb"] || 0),
+            availableRam: parseFloat(row["total_ram_mb"] || 0),
           }))
           .filter((r) => !isNaN(r.value) && !isNaN(r.timestamp));
 
@@ -535,11 +536,28 @@
           grouped[r.name].push(r);
         });
 
-        // store system info globally inside grouped
+        // ✅ Compute system info as AVERAGE across all valid rows
+        const validSys = processed.filter(
+          (r) =>
+            r.totalRam > 0 &&
+            r.availableRam > 0 &&
+            !isNaN(r.totalRam) &&
+            !isNaN(r.availableRam)
+        );
+
+        const avgTotal =
+          validSys.reduce((sum, r) => sum + r.totalRam, 0) / validSys.length ||
+          null;
+        const avgAvail =
+          validSys.reduce((sum, r) => sum + r.availableRam, 0) /
+            validSys.length || null;
+
         grouped["_meta"] = {
-          totalRam: processed[0]?.totalRam || null,
-          availableRam: processed[0]?.availableRam || null,
+          totalRam: avgTotal,
+          availableRam: avgAvail,
         };
+
+        console.log("🧠 Meta system info (avg):", grouped["_meta"]);
 
         return grouped;
       }
@@ -548,13 +566,21 @@
         const data = idx === 1 ? memoryData1 : memoryData2;
         if (!data) return;
 
-        // Always pick mem.rss if available, otherwise the first series
-        let rssData = data["mem.rss"] || Object.values(data)[0] || [];
-        rssData = rssData.slice().sort((a, b) => a.timestamp - b.timestamp); // 🔒 same as chart
+        // Always pick mem.rss if available, otherwise the first valid array series
+        let rssData = Array.isArray(data["mem.rss"])
+          ? data["mem.rss"]
+          : Object.values(data).find((v) => Array.isArray(v)) || [];
+
+        // ✅ Prevent recursion/stack overflow if rssData is not array
+        if (!Array.isArray(rssData)) {
+          console.error("❌ rssData is not an array:", rssData);
+          return;
+        }
+
+        rssData = rssData.slice().sort((a, b) => a.timestamp - b.timestamp);
 
         if (!rssData.length) return;
 
-        // Log to verify we’re using the same numbers for chart + calc
         console.log(
           `Dashboard ${idx} → First:`,
           rssData[0],
@@ -562,47 +588,62 @@
           rssData[rssData.length - 1]
         );
 
-        const values = rssData.map((d) => d.value);
-        const peak = values.reduce((max, v) => (v > max ? v : max), -Infinity);
+        // Filter out initial transient values
+        // ✅ Safely compute peak value without spreading large arrays
+        let peak = -Infinity;
+        for (const d of rssData) {
+          const val = parseFloat(d.value);
+          if (!isNaN(val) && val > peak) peak = val;
+        }
+
+        // Fallback if all invalid
+        if (!isFinite(peak) || peak <= 0) {
+          console.warn("⚠️ No valid memory values in dataset");
+          peak = 0;
+        }
+
+        const meaningful = rssData.filter((d) => d.value > peak * 0.4);
+        const values = meaningful.map((d) => d.value);
         const avg = values.reduce((a, b) => a + b, 0) / values.length;
 
         // Extract MemTotal & MemAvailable from TSV metadata
         let memTotal = data["_meta"]?.totalRam || null;
         let memAvailable = data["_meta"]?.availableRam || null;
 
-        // App memory health
+        // App & System Health
         let appHealth = null;
         if (memTotal && memTotal > 0) {
           appHealth = (1 - peak / memTotal) * 100;
           appHealth = Math.max(0, Math.min(appHealth, 100));
         }
 
-        // System memory health
         let systemHealth = null;
-        if (memTotal && memAvailable !== null) {
+        if (memTotal && memAvailable != null && memTotal > 0) {
           systemHealth = (memAvailable / memTotal) * 100;
           systemHealth = Math.max(0, Math.min(systemHealth, 100));
         }
 
-        // Update DOM: peak & avg
-        document.getElementById(`peakMemory${idx}`).textContent =
-          peak.toFixed(1) + " MB";
-        document.getElementById(`averageMemory${idx}`).textContent =
-          avg.toFixed(1) + " MB";
+        // Update DOM
+        document.getElementById(
+          `peakMemory${idx}`
+        ).textContent = `${peak.toFixed(1)} MB`;
+        document.getElementById(
+          `averageMemory${idx}`
+        ).textContent = `${avg.toFixed(1)} MB`;
 
-        // Leak detection
+        // ✅ Leak detection (once)
         const leakAnalysis = detectMemoryLeak(rssData);
 
-        // Create chart first (saves first/last into chartBounds)
+        // Create chart first
         createMemoryLeakChart(idx, rssData);
 
-        // Leak detection
+        // Leak detection visual
         const leakEl = document.getElementById(`leakStatus${idx}`);
         const leakCard = document.getElementById(`leakCard${idx}`);
 
         switch (leakAnalysis.status) {
           case "LEAK_DETECTED":
-            leakEl.innerHTML = `<span style="color: #ef4444; font-weight: bold;">LEAK (${leakAnalysis.confidence.toFixed(
+            leakEl.innerHTML = `<span style="color:#ef4444;font-weight:bold;">LEAK (${leakAnalysis.confidence.toFixed(
               0
             )}%)</span>`;
             leakCard.style.background = "rgba(239,68,68,0.2)";
@@ -611,7 +652,7 @@
             break;
 
           case "POSSIBLE_LEAK":
-            leakEl.innerHTML = `<span style="color: #f59e0b;">⚠️ POSSIBLE (${leakAnalysis.confidence.toFixed(
+            leakEl.innerHTML = `<span style="color:#f59e0b;">⚠️ POSSIBLE (${leakAnalysis.confidence.toFixed(
               0
             )}%)</span>`;
             leakCard.style.background = "rgba(245,158,11,0.15)";
@@ -619,19 +660,19 @@
             break;
 
           case "GROWTH_DETECTED":
-            leakEl.innerHTML = `<span style="color: #60a5fa;">📈 GROWTH</span>`;
+            leakEl.innerHTML = `<span style="color:#60a5fa;">📈 GROWTH</span>`;
             leakCard.style.background = "rgba(96,165,250,0.1)";
             leakCard.style.border = "1px solid #60a5fa";
             break;
 
           case "STABLE":
-            leakEl.innerHTML = `<span style="color: #10b981;">✅ STABLE</span>`;
+            leakEl.innerHTML = `<span style="color:#10b981;">✅ STABLE</span>`;
             leakCard.style.background = "rgba(16,185,129,0.1)";
             leakCard.style.border = "1px solid #10b981";
             break;
         }
 
-        // Show app health
+        // Update health visuals
         const appEl = document.getElementById(`appHealth${idx}`);
         const appCard = appEl.closest(".status-card");
         if (appHealth !== null) {
@@ -641,22 +682,17 @@
           resetCard(appEl, appCard);
         }
 
-        // Show system health
         const sysEl = document.getElementById(`systemHealth${idx}`);
-        if (sysEl) {
-          const sysCard = sysEl.closest(".status-card");
-          if (systemHealth !== null) {
-            sysEl.textContent = systemHealth.toFixed(0);
-            colorizeCard(sysCard, systemHealth);
-          } else {
-            resetCard(sysEl, sysCard);
-          }
+        const sysCard = sysEl.closest(".status-card");
+        if (systemHealth !== null) {
+          sysEl.textContent = systemHealth.toFixed(0);
+          colorizeCard(sysCard, systemHealth);
+        } else {
+          resetCard(sysEl, sysCard);
         }
 
         const title = document.querySelector(`#dashboard${idx} .chart-title`);
-        if (title) {
-          title.textContent = `${data.fileName || "TSV" + idx}`;
-        }
+        if (title) title.textContent = data.fileName || `TSV${idx}`;
       }
 
       function colorizeCard(cardEl, value) {
@@ -902,104 +938,58 @@
         ];
       }
 
-      function detectMemoryLeak(rssData) {
-        if (rssData.length < 20)
-          return { status: "INSUFFICIENT", confidence: 0 };
+      function detectMemoryLeak(data) {
+        if (!data || data.length < 2)
+          return { status: "UNKNOWN", confidence: 0, growth: "N/A" };
 
-        const sorted = rssData
-          .slice()
-          .sort((a, b) => a.timestamp - b.timestamp);
-
-        // Use reduce:
-        const peakValue = sorted.reduce(
-          (max, d) => (d.value > max ? d.value : max),
-          -Infinity
-        );
-        const meaningfulData = sorted.filter((d) => d.value > peakValue * 0.4);
-
-        if (meaningfulData.length < 2) {
-          return { status: "INSUFFICIENT", confidence: 0 };
+        // 🧠 1. Filter like the chart does (ignore initial low memory values)
+        // 🧠 Safely compute peak without spread or recursion
+        let peak = -Infinity;
+        for (const d of data) {
+          const val = parseFloat(d.value);
+          if (!isNaN(val) && val > peak) peak = val;
+        }
+        if (!isFinite(peak) || peak <= 0) {
+          console.warn("⚠️ detectMemoryLeak(): No valid memory values found");
+          peak = 0;
         }
 
-        const first = meaningfulData[0];
-        const last = meaningfulData[meaningfulData.length - 1];
-        const durationMinutes = (last.timestamp - first.timestamp) / 60;
-        const growthRate =
-          durationMinutes > 0
-            ? (last.value - first.value) / durationMinutes
-            : 0;
+        const meaningfulData = data.filter((d) => d.value > peak * 0.4);
 
-        // Calculate R-squared for consistency
-        const xs = sorted.map((d) => d.timestamp);
-        const ys = sorted.map((d) => d.value);
-        const n = xs.length;
-        const xMean = xs.reduce((a, b) => a + b, 0) / n;
-        const yMean = ys.reduce((a, b) => a + b, 0) / n;
+        // 🧠 2. Fallback: if filtered data too short, use full dataset
+        const usedData = meaningfulData.length > 1 ? meaningfulData : data;
 
-        const slope =
-          xs
-            .map((x, i) => (x - xMean) * (ys[i] - yMean))
-            .reduce((a, b) => a + b, 0) /
-          xs.map((x) => (x - xMean) ** 2).reduce((a, b) => a + b, 0);
+        const first = usedData[0].value;
+        const last = usedData[usedData.length - 1].value;
+        const durationMin =
+          (usedData[usedData.length - 1].timestamp - usedData[0].timestamp) /
+          60;
 
-        const intercept = yMean - slope * xMean;
-        const ssTot = ys
-          .map((y) => (y - yMean) ** 2)
-          .reduce((a, b) => a + b, 0);
-        const ssRes = ys
-          .map((y, i) => y - (slope * xs[i] + intercept))
-          .map((v) => v * v)
-          .reduce((a, b) => a + b, 0);
-        const rSquared = 1 - ssRes / ssTot;
+        if (durationMin <= 0)
+          return { status: "UNKNOWN", confidence: 0, growth: "N/A" };
 
-        // LEAK DETECTION BASED ON GROWTH RATE AND CONSISTENCY
+        const growthRate = (last - first) / durationMin; // MB/min
+
+        // 🧮 3. Status thresholds
         let status = "STABLE";
-        let confidence = 0;
-
-        // Memory leak thresholds based on industry standards:
-        // < 1 MB/min: Stable - Normal fluctuations
-        // 1-5 MB/min: Growth - May be normal depending on usage
-        // 5-10 MB/min: Concerning - Possible leak if consistent
-        // > 10 MB/min: Likely leak - Especially with high R²
-
-        if (growthRate < 1) {
-          // Less than 1 MB/min - STABLE
-          status = "STABLE";
-          confidence = 95;
-        } else if (growthRate < 5) {
-          // 1-5 MB/min - Check consistency
-          if (rSquared > 0.7) {
-            status = "GROWTH_DETECTED";
-            confidence = 60;
-          } else {
-            status = "STABLE";
-            confidence = 80;
-          }
-        } else if (growthRate < 10) {
-          // 5-10 MB/min - POSSIBLE LEAK if consistent
-          if (rSquared > 0.6) {
-            status = "POSSIBLE_LEAK";
-            confidence = Math.min(70, rSquared * 100);
-          } else {
-            status = "GROWTH_DETECTED";
-            confidence = 50;
-          }
-        } else if (growthRate < 20) {
-          // 10-20 MB/min - LIKELY LEAK
-          if (rSquared > 0.5) {
-            status = "LEAK_DETECTED";
-            confidence = Math.min(80, rSquared * 100);
-          } else {
-            status = "POSSIBLE_LEAK";
-            confidence = 65;
-          }
-        } else {
-          // > 20 MB/min - DEFINITE LEAK
+        if (growthRate <= 0) {
+          status = "STABLE"; // memory is freeing, no leak
+        } else if (growthRate > 5) {
           status = "LEAK_DETECTED";
-          confidence = Math.min(95, Math.max(80, rSquared * 100));
+        } else if (growthRate > 3) {
+          status = "POSSIBLE_LEAK";
+        } else if (growthRate > 1) {
+          status = "GROWTH_DETECTED";
+        } else {
+          status = "STABLE";
         }
 
-        return { status, confidence, growthRate, rSquared };
+        // 🧩 4. Return safe structured object
+        return {
+          status,
+          growth: `${growthRate.toFixed(2)} MB/min`,
+          confidence: Math.min(100, Math.abs(growthRate) * 10),
+        };
       }
 
       function normalizeTimestamps(data) {
