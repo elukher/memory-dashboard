@@ -642,47 +642,34 @@
       }
 
       function processMemoryData(rawData) {
+        // Parse new TSV structure with total_rss_mb, total_ram_mb, available_ram_mb
         const processed = rawData
           .map((row) => ({
             timestamp: parseFloat(row["time_seconds"] || 0),
-            value: parseFloat(row["memory_mb"] || 0),
-            name: row["counter_name"] || "",
-            // 🧠 swapped
-            totalRam: parseFloat(row["available_ram_mb"] || 0),
-            availableRam: parseFloat(row["total_ram_mb"] || 0),
+            value: parseFloat(row["total_rss_mb"] || 0),
+            totalRam: parseFloat(row["total_ram_mb"] || 0),
+            availableRam: parseFloat(row["available_ram_mb"] || 0),
           }))
           .filter((r) => !isNaN(r.value) && !isNaN(r.timestamp));
 
-        const grouped = {};
-        processed.forEach((r) => {
-          if (!grouped[r.name]) grouped[r.name] = [];
-          grouped[r.name].push(r);
-        });
-
-        // ✅ Compute system info as AVERAGE across all valid rows
-        const validSys = processed.filter(
+        // 🧠 Since only first row has total/available RAM, extract it there
+        const sysRow = processed.find(
           (r) =>
-            r.totalRam > 0 &&
-            r.availableRam > 0 &&
+            r.totalRam &&
             !isNaN(r.totalRam) &&
+            r.totalRam > 0 &&
+            r.availableRam &&
             !isNaN(r.availableRam)
         );
-
-        const avgTotal =
-          validSys.reduce((sum, r) => sum + r.totalRam, 0) / validSys.length ||
-          null;
-        const avgAvail =
-          validSys.reduce((sum, r) => sum + r.availableRam, 0) /
-            validSys.length || null;
-
-        grouped["_meta"] = {
-          totalRam: avgTotal,
-          availableRam: avgAvail,
+        const meta = {
+          totalRam: sysRow ? sysRow.totalRam : null,
+          availableRam: sysRow ? sysRow.availableRam : null,
         };
 
-        console.log("🧠 Meta system info (avg):", grouped["_meta"]);
-
-        return grouped;
+        return {
+          "mem.rss": processed,
+          _meta: meta,
+        };
       }
 
       function updateDashboard(idx) {
@@ -746,8 +733,10 @@
               document.getElementById(`memoryGrowth${idx}`).textContent
             ) || 0;
 
-          // weighted penalty for instability and growth
-          appHealth = 100 - (usageRatio * 40 + Math.abs(growthRate) * 10);
+          // ✅ New formula: penalize only positive growth
+          const growthPenalty =
+            growthRate > 0 ? growthRate * 10 : growthRate * 2; // small bonus if freeing
+          appHealth = 100 - (usageRatio * 40 + growthPenalty);
 
           // clamp between 0–100
           appHealth = Math.max(0, Math.min(appHealth, 100));
